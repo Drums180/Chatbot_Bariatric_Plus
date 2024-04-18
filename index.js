@@ -1,56 +1,38 @@
-const {
-  DisconnectReason,
-  useMultiFileAuthState,
-} = require("@whiskeysockets/baileys");
-const useMongoDBAuthState = require("./mongoAuthState");
+require("dotenv").config();
+
 const makeWASocket = require("@whiskeysockets/baileys").default;
-const mongoURL = "mongodb+srv://Saif:Arhaan123@cluster0.mj6hd.mongodb.net";
-const { MongoClient } = require("mongodb");
+const {
+  useMultiFileAuthState,
+  DisconnectReason,
+} = require("@whiskeysockets/baileys");
+const { fetchChatGPTResponse } = require("./chatgpt.js");
 
 async function connectionLogic() {
-  const mongoClient = new MongoClient(mongoURL, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
-  await mongoClient.connect();
-  // const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
-  const collection = mongoClient
-    .db("whatsapp_api")
-    .collection("auth_info_baileys");
-  const { state, saveCreds } = await useMongoDBAuthState(collection);
-
+  const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
   const sock = makeWASocket({
-    // can provide additional config here
     printQRInTerminal: true,
     auth: state,
   });
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update || {};
-
-    if (qr) {
-      console.log(qr);
-      // write custom logic over here
-    }
-
-    if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !==
-        DisconnectReason.loggedOut;
-
-      if (shouldReconnect) {
-        connectionLogic();
-      }
+    if (qr) console.log(qr);
+    if (
+      connection === "close" &&
+      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+    ) {
+      connectionLogic();
     }
   });
 
-  sock.ev.on("messages.update", (messageInfo) => {
-    console.log(messageInfo);
+  sock.ev.on("messages.upsert", async (messageInfoUpsert) => {
+    const message = messageInfoUpsert.messages[0];
+    if (!message.key.fromMe && message.message.conversation) {
+      const response = await fetchChatGPTResponse(message.message.conversation);
+      await sock.sendMessage(message.key.remoteJid, { text: response });
+    }
   });
 
-  sock.ev.on("messages.upsert", (messageInfoUpsert) => {
-    console.log(messageInfoUpsert);
-  });
   sock.ev.on("creds.update", saveCreds);
 }
 
